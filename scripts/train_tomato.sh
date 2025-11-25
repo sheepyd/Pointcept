@@ -20,10 +20,10 @@ export PYTHONPATH="${PWD}:${PYTHONPATH}"
 NUM_GPUS=1
 
 # Config file
-CONFIG="configs/tomato/insseg-pointgroup-v1m2-0-ptv3-tomato.py"
+CONFIG="configs/tomato/semseg-spunet-v1m1-0-tomato.py"
 
 # Experiment name (will create exp folder with this name)
-EXP_NAME="ptv3_tomato20480_$(date +%Y%m%d_%H%M%S)"
+EXP_NAME="spunet_tomato20480_$(date +%Y%m%d_%H%M%S)"
 
 # Training command
 python tools/train.py \
