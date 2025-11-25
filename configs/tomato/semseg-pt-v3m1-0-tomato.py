@@ -1,28 +1,27 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 2  # bs: total bs in all gpus (adjust based on your GPU memory)
-num_worker = 1
-mix_prob = 0
+batch_size = 2  # bs: total bs in all gpus (PTv3 uses more memory, keep small)
+num_worker = 4
+mix_prob = 0.8
 empty_cache = False
 enable_amp = True
 evaluate = True
 enable_wandb = False
 
-
-# Tomato dataset has 3 semantic classes (0, 1, 2)
-# You should replace these names with your actual class names
+# Tomato dataset has 3 semantic classes
 class_names = [
-    "soil",  # class 0
+    "soil",        # class 0
     "stem",        # class 1
-    "tomato",      # class 2
+    "leaf",      # class 2
 ]
 num_classes = 3
-segment_ignore_index = (-1,)  # only ignore -1 labels
 
 # model settings
 model = dict(
-    type="PG-v1m2",
+    type="DefaultSegmentorV2",
+    num_classes=num_classes,
+    backbone_out_channels=64,
     backbone=dict(
         type="PT-v3m1",
         in_channels=6,
@@ -45,7 +44,7 @@ model = dict(
         shuffle_orders=True,
         pre_norm=True,
         enable_rpe=False,
-        enable_flash=False,
+        enable_flash=False,  # set to True if you have flash-attn installed
         upcast_attention=False,
         upcast_softmax=False,
         enc_mode=False,
@@ -56,28 +55,14 @@ model = dict(
         pdnorm_affine=True,
         pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
     ),
-    backbone_out_channels=64,
-    semantic_num_classes=num_classes,
-    semantic_ignore_index=-1,
-    segment_ignore_index=segment_ignore_index,
-    instance_ignore_index=-1,
-    cluster_thresh=1.5,
-    cluster_closed_points=300,
-    cluster_propose_points=100,
-    cluster_min_points=50,
     criteria=[
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=-1),
-        dict(
-            type="LovaszLoss",
-            mode="multiclass",
-            loss_weight=1.0,
-            ignore_index=-1,
-        ),
+        dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=-1),
     ],
 )
 
 # scheduler settings
-epoch = 80
+epoch = 800
 eval_epoch = 2
 optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
 scheduler = dict(
@@ -89,7 +74,6 @@ scheduler = dict(
     final_div_factor=1000.0,
 )
 param_dicts = [dict(keyword="block", lr=0.0006)]
-
 
 # dataset settings
 dataset_type = "TomatoDataset"
@@ -128,22 +112,10 @@ data = dict(
             dict(type="SphereCrop", sample_rate=0.8, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
-            dict(
-                type="InstanceParser",
-                segment_ignore_index=segment_ignore_index,
-                instance_ignore_index=-1,
-            ),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=(
-                    "coord",
-                    "grid_coord",
-                    "segment",
-                    "instance",
-                    "instance_centroid",
-                    "bbox",
-                ),
+                keys=("coord", "grid_coord", "segment"),
                 feat_keys=("color", "normal"),
             ),
         ],
@@ -155,45 +127,22 @@ data = dict(
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
-            dict(
-                type="Copy",
-                keys_dict={
-                    "coord": "origin_coord",
-                    "segment": "origin_segment",
-                    "instance": "origin_instance",
-                },
-            ),
+            dict(type="Copy", keys_dict={"segment": "origin_segment"}),
             dict(
                 type="GridSample",
                 grid_size=0.02,
                 hash_type="fnv",
                 mode="train",
                 return_grid_coord=True,
+                return_inverse=True,
             ),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
-            dict(
-                type="InstanceParser",
-                segment_ignore_index=segment_ignore_index,
-                instance_ignore_index=-1,
-            ),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=(
-                    "coord",
-                    "grid_coord",
-                    "segment",
-                    "instance",
-                    "origin_coord",
-                    "origin_segment",
-                    "origin_instance",
-                    "instance_centroid",
-                    "bbox",
-                    "name",
-                ),
+                keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
                 feat_keys=("color", "normal"),
-                offset_keys_dict=dict(offset="coord", origin_offset="origin_coord"),
             ),
         ],
         test_mode=False,
@@ -204,68 +153,65 @@ data = dict(
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
-            dict(
-                type="Copy",
-                keys_dict={
-                    "coord": "origin_coord",
-                    "segment": "origin_segment",
-                    "instance": "origin_instance",
-                },
-            ),
-            dict(
+            dict(type="NormalizeColor"),
+        ],
+        test_mode=True,
+        test_cfg=dict(
+            voxelize=dict(
                 type="GridSample",
                 grid_size=0.02,
                 hash_type="fnv",
-                mode="train",
+                mode="test",
                 return_grid_coord=True,
             ),
-            dict(type="CenterShift", apply_z=False),
-            dict(type="NormalizeColor"),
-            dict(
-                type="InstanceParser",
-                segment_ignore_index=segment_ignore_index,
-                instance_ignore_index=-1,
-            ),
-            dict(type="ToTensor"),
-            dict(
-                type="Collect",
-                keys=(
-                    "coord",
-                    "grid_coord",
-                    "segment",
-                    "instance",
-                    "origin_coord",
-                    "origin_segment",
-                    "origin_instance",
-                    "instance_centroid",
-                    "bbox",
-                    "name",
+            crop=None,
+            post_transform=[
+                dict(type="CenterShift", apply_z=False),
+                dict(type="ToTensor"),
+                dict(
+                    type="Collect",
+                    keys=("coord", "grid_coord", "index"),
+                    feat_keys=("color", "normal"),
                 ),
-                feat_keys=("color", "normal"),
-                offset_keys_dict=dict(offset="coord", origin_offset="origin_coord"),
-            ),
-        ],
-        test_mode=False,
+            ],
+            aug_transform=[
+                [
+                    dict(
+                        type="RandomRotateTargetAngle",
+                        angle=[0],
+                        axis="z",
+                        center=[0, 0, 0],
+                        p=1,
+                    )
+                ],
+                [
+                    dict(
+                        type="RandomRotateTargetAngle",
+                        angle=[1 / 2],
+                        axis="z",
+                        center=[0, 0, 0],
+                        p=1,
+                    )
+                ],
+                [
+                    dict(
+                        type="RandomRotateTargetAngle",
+                        angle=[1],
+                        axis="z",
+                        center=[0, 0, 0],
+                        p=1,
+                    )
+                ],
+                [
+                    dict(
+                        type="RandomRotateTargetAngle",
+                        angle=[3 / 2],
+                        axis="z",
+                        center=[0, 0, 0],
+                        p=1,
+                    )
+                ],
+            ],
+        ),
     ),
-)
-
-hooks = [
-    dict(type="CheckpointLoader", keywords="module.", replacement="module."),
-    dict(type="IterationTimer", warmup_iter=2),
-    dict(type="InformationWriter"),
-    dict(
-        type="InsSegEvaluator",
-        segment_ignore_index=segment_ignore_index,
-        instance_ignore_index=-1,
-    ),
-    dict(type="CheckpointSaver", save_freq=None),
-    dict(type="PreciseEvaluator", test_last=False),
-]
-
-# Tester
-test = dict(
-    type="InsSegTester",
-    segment_ignore_index=segment_ignore_index,
-    instance_ignore_index=-1,
-    verbose=False,
 )
